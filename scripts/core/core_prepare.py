@@ -6,7 +6,6 @@ import json
 import os
 import random
 import re
-from collections import Counter
 from collections import Counter, defaultdict
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from pathlib import Path
@@ -379,23 +378,16 @@ def build_view(params: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     # Recompter après dedup
     label_counts = Counter(d["label"] for d in docs)
 
-
-    # Appliquer l'équilibrage
+    # Appliquer l'équilibrage via la config V4 (balance.yml + params)
     docs_balanced, label_counts_balanced = apply_balance(
         docs,
-        label_field=params["label_field"],
-        strategy=params.get("balance_strategy", "none"),
-        preset_name=params.get("balance_preset"),
-        balance_cfg=params["balance_cfg"],
+        params,
+        label_counts,
     )
 
-
-
+    balance_strategy = params.get("balance_strategy", "none")
     print(f"[core_prepare] Docs après équilibrage ({balance_strategy}): {len(docs_balanced)}")
     print(f"[core_prepare] Répartition labels (après balance): {label_counts_balanced}")
-
-    label_counts_after = Counter(d["label"] for d in train_docs)
-    labels_set = sorted(label_counts_after.keys())
 
     # Split train/job
     seed = int(params.get("seed", 42))
@@ -404,6 +396,8 @@ def build_view(params: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     n_train = int(round(train_prop * n_total))
     train_docs = docs_balanced[:n_train]
     job_docs = docs_balanced[n_train:]
+
+
 
     print(f"[core_prepare] Split train/job avec train_prop={train_prop}")
     print(f"  -> train: {len(train_docs)} docs")
@@ -627,7 +621,7 @@ def apply_balance(
     """
     Stratégies : none | cap_docs | cap_tokens | alpha_total | class_weights
     """
-    strategy = (params.get("balance_strategy") or "none").lower()
+    strategy = (params.get("balance_strategy") or "none").strip().lower()
     balance_cfg = params.get("balance_cfg", {}) or {}
     seed = int(params.get("seed", 42))
 

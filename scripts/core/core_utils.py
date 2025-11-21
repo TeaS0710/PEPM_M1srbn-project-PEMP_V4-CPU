@@ -13,6 +13,7 @@ from rich.panel import Panel
 
 import yaml
 
+console = Console()
 COMMON_DIR = os.path.join("configs", "common")
 PIPELINE_VERSION = "4.0.0-dev"
 
@@ -321,3 +322,4 @@ def debug_print_params(params: Dict[str, Any]) -> None:
     console.print()
     console.print(t4)
     console.print()
+

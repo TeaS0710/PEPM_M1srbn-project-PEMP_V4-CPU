@@ -18,8 +18,8 @@ from scripts.core.core_utils import (
     PIPELINE_VERSION,
     apply_global_seed,
     log,
-    print_params_rich,
 )
+
 
 
 # ----------------- CLI -----------------
