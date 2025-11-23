@@ -466,8 +466,10 @@ def build_view(params: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     Construire la vue supervisée (train.tsv, job.tsv, meta_view.json).
     Retourne un dict de meta pour usage ultérieur (log ou tests).
     """
-    corpus = params["corpus"]
-    tei_path = corpus["corpus_path"]
+    corpus_single = params.get("corpus")
+    corpora_multi = params.get("corpora") or ([corpus_single] if corpus_single else [])
+    source_field = params.get("source_field", "corpus_id")
+    merge_mode = params.get("merge_mode", "single")
     label_fields = params.get("label_fields")
     label_field = params.get("label_field")
     # Priorité à label_fields (liste) si présent, sinon label_field (héritage)
@@ -489,10 +491,11 @@ def build_view(params: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     balance_strategy = params.get("balance_strategy", "none")
     balance_preset = params.get("balance_preset")
 
-    corpus_id = params.get("corpus_id", corpus.get("corpus_id", "unknown_corpus"))
+    corpus_id = params.get("corpus_id", (corpus_single or {}).get("corpus_id", "unknown_corpus"))
+    dataset_id = params.get("dataset_id") or corpus_id
     view = params.get("view", "unknown_view")
 
-    interim_dir = os.path.join("data", "interim", corpus_id, view)
+    interim_dir = os.path.join("data", "interim", str(dataset_id), view)
     os.makedirs(interim_dir, exist_ok=True)
 
     # Collecte des docs (RAM V1 ; optimisable ensuite en streaming/sharding)
@@ -505,66 +508,69 @@ def build_view(params: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
         meta_fields.update({"crawl", "domain"})
     if actors_cfg:
         meta_fields.add("actor")
-
-    print(f"[core_prepare] Lecture TEI: {tei_path}")
-    idx = 0
     ideology_stats: Counter = Counter()
-    for elem in iter_tei_docs(tei_path):
-        idx += 1
-        doc_id = extract_doc_id(elem, idx)
-        text = extract_text(elem)
+    idx_global = 0
+    for corpus in corpora_multi:
+        tei_path = corpus["corpus_path"]
+        corpus_id_src = corpus.get("corpus_id", "unknown_corpus")
+        print(f"[core_prepare] Lecture TEI: {tei_path} (source={corpus_id_src})")
+        for elem in iter_tei_docs(tei_path):
+            idx_global += 1
+            doc_id = extract_doc_id(elem, idx_global)
+            text = extract_text(elem)
 
-        if len(text) < min_chars:
-            continue
-
-        # compter les tokens selon le tokenizer configuré
-        tokens = count_tokens(text, tokenizer_name)
-
-        # Filtre max_tokens basé sur ce tokenizer
-        if max_tokens and tokens > max_tokens:
-            continue
-
-        doc_modality = extract_modality(elem, params)
-        modality_counts[doc_modality] += 1
-        if modality_filter and doc_modality != modality_filter:
-            continue
-
-        row_meta = {field: extract_term(elem, field) for field in meta_fields}
-
-        label_raw: Optional[str] = None
-        label: Optional[str] = None
-        if ideology_cfg:
-            label_raw, label, ideology_reason = resolve_ideology_label(row_meta, ideology_cfg)
-            if ideology_reason and ideology_reason != "ok":
-                ideology_stats[ideology_reason] += 1
-        else:
-            label_raw = extract_label_raw(elem, fields_for_labels)
-            if not label_raw:
+            if len(text) < min_chars:
                 continue
-            mapped = apply_label_mapping(
-                label_raw,
-                label_map or {},
-                label_map_unknown_cfg,
+
+            # compter les tokens selon le tokenizer configuré
+            tokens = count_tokens(text, tokenizer_name)
+
+            # Filtre max_tokens basé sur ce tokenizer
+            if max_tokens and tokens > max_tokens:
+                continue
+
+            doc_modality = extract_modality(elem, params)
+            modality_counts[doc_modality] += 1
+            if modality_filter and doc_modality != modality_filter:
+                continue
+
+            row_meta = {field: extract_term(elem, field) for field in meta_fields}
+            row_meta[source_field] = corpus_id_src
+
+            label_raw: Optional[str] = None
+            label: Optional[str] = None
+            if ideology_cfg:
+                label_raw, label, ideology_reason = resolve_ideology_label(row_meta, ideology_cfg)
+                if ideology_reason and ideology_reason != "ok":
+                    ideology_stats[ideology_reason] += 1
+            else:
+                label_raw = extract_label_raw(elem, fields_for_labels)
+                if not label_raw:
+                    continue
+                mapped = apply_label_mapping(
+                    label_raw,
+                    label_map or {},
+                    label_map_unknown_cfg,
+                )
+                if not mapped:
+                    continue
+                label = mapped
+
+            if not label:
+                continue
+
+            label_counts[label] += 1
+            docs.append(
+                {
+                    "id": doc_id,
+                    "label": label,
+                    "label_raw": label_raw,
+                    "text": text,
+                    "modality": doc_modality,
+                    "tokens": tokens,  # pour cap_tokens/stats/etc.
+                    "meta": row_meta,
+                }
             )
-            if not mapped:
-                continue
-            label = mapped
-
-        if not label:
-            continue
-
-        label_counts[label] += 1
-        docs.append(
-            {
-                "id": doc_id,
-                "label": label,
-                "label_raw": label_raw,
-                "text": text,
-                "modality": doc_modality,
-                "tokens": tokens,  # pour cap_tokens/stats/etc.
-                "meta": row_meta,
-            }
-        )
 
     if not docs:
         raise SystemExit("[core_prepare] Aucun document valide après filtrage. Vérifie ton profil/config.")
@@ -654,6 +660,7 @@ def build_view(params: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
 
     meta = {
         "profile": params.get("profile"),
+        "dataset_id": dataset_id,
         "corpus_id": corpus_id,
         "view": view,
         "modality_filter": modality_filter,
@@ -662,6 +669,9 @@ def build_view(params: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
         "label_map": label_map_path,
         "ideology_config": ideology_cfg,
         "actors_filter": actors_cfg,
+        "source_field": source_field,
+        "source_corpora": [c.get("corpus_id") for c in corpora_multi],
+        "merge_mode": merge_mode,
         "balance_strategy": balance_strategy,
         "balance_preset": balance_preset,
         "train_prop": train_prop,
@@ -699,8 +709,8 @@ def build_view(params: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     job_path = os.path.join(interim_dir, "job.tsv")
     meta_path = os.path.join(interim_dir, "meta_view.json")
 
-    write_tsv(train_path, train_docs)
-    write_tsv(job_path, job_docs)
+    write_tsv(train_path, train_docs, source_field=source_field)
+    write_tsv(job_path, job_docs, source_field=source_field)
 
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -712,9 +722,9 @@ def build_view(params: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
     return meta
 
 
-def write_tsv(path: str, docs: List[Dict[str, Any]]) -> None:
-    """Écrire une liste de docs en TSV (id, label, label_raw, modality, text)."""
-    fieldnames = ["id", "label", "label_raw", "modality", "text"]
+def write_tsv(path: str, docs: List[Dict[str, Any]], source_field: str = "corpus_id") -> None:
+    """Écrire une liste de docs en TSV (id, label, label_raw, modality, source, text)."""
+    fieldnames = ["id", "label", "label_raw", "modality", source_field, "text"]
     with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(
             f, fieldnames=fieldnames, delimiter="\t", quoting=csv.QUOTE_MINIMAL
@@ -727,6 +737,7 @@ def write_tsv(path: str, docs: List[Dict[str, Any]]) -> None:
                     "label": d["label"],
                     "label_raw": d["label_raw"],
                     "modality": d["modality"],
+                    source_field: (d.get("meta") or {}).get(source_field, "unknown"),
                     "text": d["text"],
                 }
             )
@@ -935,16 +946,17 @@ def build_formats(params: Dict[str, Any], meta_view: Dict[str, Any]) -> None:
     Construit les formats pour chaque famille:
       - spaCy : DocBin shardés (train_000.spacy, ...)
       - sklearn / hf / check : référencent les TSV.
-    Ecrit data/processed/<corpus>/<view>/meta_formats.json
+    Ecrit data/processed/<dataset>/<view>/meta_formats.json
     """
     from scripts.core.core_utils import log
 
     families = params.get("families", []) or []
-    corpus_id = params.get("corpus_id", params["corpus"].get("corpus_id", "unknown_corpus"))
+    corpus_id = params.get("corpus_id", params.get("corpus", {}).get("corpus_id", "unknown_corpus"))
+    dataset_id = params.get("dataset_id") or corpus_id
     view = params.get("view", "unknown_view")
 
-    interim_dir = Path("data") / "interim" / corpus_id / view
-    processed_root = Path("data") / "processed" / corpus_id / view
+    interim_dir = Path("data") / "interim" / str(dataset_id) / view
+    processed_root = Path("data") / "processed" / str(dataset_id) / view
     processed_root.mkdir(parents=True, exist_ok=True)
 
     train_tsv = interim_dir / "train.tsv"
@@ -952,6 +964,7 @@ def build_formats(params: Dict[str, Any], meta_view: Dict[str, Any]) -> None:
 
     formats_meta = {
         "profile": params.get("profile"),
+        "dataset_id": dataset_id,
         "corpus_id": corpus_id,
         "view": view,
         "families": {},
