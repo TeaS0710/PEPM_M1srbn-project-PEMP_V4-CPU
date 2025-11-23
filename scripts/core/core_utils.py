@@ -143,24 +143,24 @@ def resolve_profile_base(profile_name: str, overrides: Optional[List[str]] = Non
     profile_path = os.path.join("configs", "profiles", f"{profile_name}.yml")
     profile_cfg = load_yaml(profile_path)
 
-    corpora_cfg  = load_yaml(os.path.join(COMMON_DIR, "corpora.yml"))
-    balance_cfg  = load_yaml(os.path.join(COMMON_DIR, "balance.yml"))
+    corpora_cfg = load_yaml(os.path.join(COMMON_DIR, "corpora.yml"))
+    balance_cfg = load_yaml(os.path.join(COMMON_DIR, "balance.yml"))
     hardware_cfg = load_yaml(os.path.join(COMMON_DIR, "hardware.yml"))
-    models_cfg   = load_yaml(os.path.join(COMMON_DIR, "models.yml"))
+    models_cfg = load_yaml(os.path.join(COMMON_DIR, "models.yml"))
 
-    corpus_id = profile_cfg.get("corpus_id")
-    if corpus_id not in corpora_cfg:
-        raise SystemExit(f"[config] corpus_id '{corpus_id}' non défini dans common/corpora.yml")
+    data_cfg = profile_cfg.get("data") or {}
+    analysis_cfg = profile_cfg.get("analysis") or {}
 
     params: Dict[str, Any] = {
         "profile": profile_cfg.get("profile", profile_name),
         "description": profile_cfg.get("description", ""),
-        "corpus": corpora_cfg[corpus_id],
         "profile_raw": profile_cfg,
         "balance_cfg": balance_cfg,
         "hardware_cfg": hardware_cfg,
         "models_cfg": models_cfg,
         "seed": profile_cfg.get("seed", 42),
+        "data": deepcopy(data_cfg),
+        "analysis": analysis_cfg,
     }
 
     # Champs simples copiés tels quels si présents
@@ -173,7 +173,7 @@ def resolve_profile_base(profile_name: str, overrides: Optional[List[str]] = Non
         "models_spacy", "models_sklearn", "models_hf", "models_check",
         "balance_strategy", "balance_preset", "balance_mode",
         "hardware_preset", "debug_mode",
-        "ideology", "actors",
+        "ideology", "actors", "dataset_id",
     ]
     for k in simple_keys:
         if k in profile_cfg:
@@ -189,15 +189,6 @@ def resolve_profile_base(profile_name: str, overrides: Optional[List[str]] = Non
     params["pipeline_version"] = PIPELINE_VERSION
     params = apply_overrides(params, overrides)
 
-    # Re-résoudre le corpus effectif après overrides
-    corpus_id_eff = params.get("corpus_id", profile_cfg.get("corpus_id"))
-    if corpus_id_eff not in corpora_cfg:
-        raise SystemExit(
-            f"[config] corpus_id '{corpus_id_eff}' non défini dans common/corpora.yml"
-        )
-    params["corpus_id"] = corpus_id_eff
-    params["corpus"] = corpora_cfg[corpus_id_eff]
-
     # Re-résoudre le preset hardware après overrides
     hardware_preset_eff = params.get("hardware_preset", profile_cfg.get("hardware_preset", "small"))
     params["hardware_preset"] = hardware_preset_eff
@@ -208,6 +199,56 @@ def resolve_profile_base(profile_name: str, overrides: Optional[List[str]] = Non
     for k in ("max_train_docs_sklearn", "max_train_docs_spacy", "max_train_docs_hf"):
         if k in params and params[k] is not None:
             hw[k] = params[k]
+
+    # Résolution multi/single corpus
+    data_cfg_eff = params.get("data") or data_cfg or {}
+    corpus_ids_multi = data_cfg_eff.get("corpus_ids")
+    merge_mode = data_cfg_eff.get("merge_mode", "single")
+    source_field = data_cfg_eff.get("source_field", "corpus_id")
+
+    corpus_id_single = params.get("corpus_id", profile_cfg.get("corpus_id"))
+
+    if not corpus_ids_multi:
+        if not corpus_id_single:
+            raise SystemExit(
+                f"[config] Profil {profile_name} sans corpus_id ni data.corpus_ids"
+            )
+        if corpus_id_single not in corpora_cfg:
+            raise SystemExit(
+                f"[config] corpus_id '{corpus_id_single}' non défini dans common/corpora.yml"
+            )
+
+        corpus_cfg = corpora_cfg[corpus_id_single]
+
+        params["corpus_id"] = corpus_id_single
+        params["corpus"] = corpus_cfg
+        params["corpora"] = [corpus_cfg]
+        params["merge_mode"] = "single"
+        params["source_field"] = source_field
+
+        dataset_id = params.get("dataset_id") or corpus_id_single
+        params["dataset_id"] = dataset_id
+    else:
+        missing = [cid for cid in corpus_ids_multi if cid not in corpora_cfg]
+        if missing:
+            raise SystemExit(
+                f"[config] corpus_ids inconnus dans common/corpora.yml: {missing}"
+            )
+
+        corpora_list = [corpora_cfg[cid] for cid in corpus_ids_multi]
+        dataset_id = (
+            params.get("dataset_id")
+            or params.get("corpus_id")
+            or profile_name
+        )
+
+        params["corpora"] = corpora_list
+        params["merge_mode"] = merge_mode
+        params["source_field"] = source_field
+        params["dataset_id"] = dataset_id
+
+        params["corpus_id"] = dataset_id
+        params["corpus"] = corpora_list[0]
 
     # Alias convivial : balance_mode -> balance_strategy
     bm = (params.get("balance_mode") or "").strip().lower()

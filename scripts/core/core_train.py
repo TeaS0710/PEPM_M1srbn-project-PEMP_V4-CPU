@@ -90,7 +90,7 @@ def set_blas_threads(n_threads: int) -> None:
     """
     if n_threads is None or n_threads <= 0:
         return
-    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
         os.environ[var] = str(n_threads)
     print(f"[core_train] BLAS threads fixés à {n_threads}")
 
@@ -110,9 +110,10 @@ def ensure_dir(path: Path) -> None:
 
 
 def get_model_output_dir(params: Dict[str, Any], family: str, model_id: str) -> Path:
-    corpus_id = params.get("corpus_id", params["corpus"].get("corpus_id", "unknown_corpus"))
+    corpus_id = params.get("corpus_id", params.get("corpus", {}).get("corpus_id", "unknown_corpus"))
+    dataset_id = params.get("dataset_id") or corpus_id
     view = params.get("view", "unknown_view")
-    return Path("models") / corpus_id / view / family / model_id
+    return Path("models") / str(dataset_id) / view / family / model_id
 
 
 def load_tsv_dataset(params: Dict[str, Any]) -> Tuple[List[str], List[str], List[str]]:
@@ -122,9 +123,10 @@ def load_tsv_dataset(params: Dict[str, Any]) -> Tuple[List[str], List[str], List
     job_labels ne sont pas strictement nécessaires pour l'entraînement (évent. early stopping),
     on peut les charger plus tard lors de l'évaluation.
     """
-    corpus_id = params.get("corpus_id", params["corpus"].get("corpus_id", "unknown_corpus"))
+    corpus_id = params.get("corpus_id", params.get("corpus", {}).get("corpus_id", "unknown_corpus"))
+    dataset_id = params.get("dataset_id") or corpus_id
     view = params.get("view", "unknown_view")
-    interim_dir = Path("data") / "interim" / corpus_id / view
+    interim_dir = Path("data") / "interim" / str(dataset_id) / view
     train_path = interim_dir / "train.tsv"
     job_path = interim_dir / "job.tsv"
 
@@ -202,6 +204,7 @@ def save_meta_model(
     meta = {
         "profile": params.get("profile"),
         "description": params.get("description", ""),
+        "dataset_id": params.get("dataset_id", params.get("corpus_id", params["corpus"].get("corpus_id"))),
         "corpus_id": params.get("corpus_id", params["corpus"].get("corpus_id")),
         "view": params.get("view"),
         "family": family,
@@ -257,8 +260,9 @@ def train_spacy_model(params: Dict[str, Any], model_id: str) -> None:
 
     # Localiser processed_dir / spacy_dir (utile pour fallback)
     corpus_id = params.get("corpus_id", params.get("corpus", {}).get("corpus_id"))
+    dataset_id = params.get("dataset_id") or corpus_id
     view = params.get("view", params.get("profile_raw", {}).get("view"))
-    processed_dir = Path("data/processed") / str(corpus_id) / str(view)
+    processed_dir = Path("data/processed") / str(dataset_id) / str(view)
     spacy_dir = processed_dir / "spacy"
 
     meta_formats_path = processed_dir / "meta_formats.json"

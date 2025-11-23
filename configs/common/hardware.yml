@@ -8,6 +8,9 @@ presets:
     blas_threads: 1
     tsv_chunk_rows: 20000
     spacy_shard_docs: 10000
+    max_train_docs_spacy: 20000
+    max_train_docs_sklearn: 100000
+    max_train_docs_hf: 5000
 
   medium:
     desc: "Machine intermédiaire"

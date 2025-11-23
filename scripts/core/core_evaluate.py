@@ -6,8 +6,9 @@ import json
 import os
 import random
 import sys
+from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if PROJECT_ROOT not in sys.path:
@@ -68,7 +69,7 @@ def set_blas_threads(n_threads: int) -> None:
     """
     if n_threads is None or n_threads <= 0:
         return
-    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+    for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
         os.environ[var] = str(n_threads)
     print(f"[core_evaluate] BLAS threads fixés à {n_threads}")
 
@@ -78,25 +79,28 @@ def ensure_dir(path: Path) -> None:
 
 
 def get_model_output_dir(params: Dict[str, Any], family: str, model_id: str) -> Path:
-    corpus_id = params.get("corpus_id", params["corpus"].get("corpus_id", "unknown_corpus"))
+    corpus_id = params.get("corpus_id", params.get("corpus", {}).get("corpus_id", "unknown_corpus"))
+    dataset_id = params.get("dataset_id") or corpus_id
     view = params.get("view", "unknown_view")
-    return Path("models") / corpus_id / view / family / model_id
+    return Path("models") / str(dataset_id) / view / family / model_id
 
 
 def get_reports_dir(params: Dict[str, Any], family: str, model_id: str) -> Path:
-    corpus_id = params.get("corpus_id", params["corpus"].get("corpus_id", "unknown_corpus"))
+    corpus_id = params.get("corpus_id", params.get("corpus", {}).get("corpus_id", "unknown_corpus"))
+    dataset_id = params.get("dataset_id") or corpus_id
     view = params.get("view", "unknown_view")
-    return Path("reports") / corpus_id / view / family / model_id
+    return Path("reports") / str(dataset_id) / view / family / model_id
 
 
-def load_job_tsv(params: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+def load_job_tsv(params: Dict[str, Any]) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
     """
-    Charger job.tsv (ou fallback train.tsv) depuis data/interim/{corpus_id}/{view}/
-    Retourne (texts, labels).
+    Charger job.tsv (ou fallback train.tsv) depuis data/interim/{dataset_id}/{view}/
+    Retourne (texts, labels, rows_complets).
     """
-    corpus_id = params.get("corpus_id", params["corpus"].get("corpus_id", "unknown_corpus"))
+    corpus_id = params.get("corpus_id", params.get("corpus", {}).get("corpus_id", "unknown_corpus"))
+    dataset_id = params.get("dataset_id") or corpus_id
     view = params.get("view", "unknown_view")
-    interim_dir = Path("data") / "interim" / corpus_id / view
+    interim_dir = Path("data") / "interim" / str(dataset_id) / view
     job_path = interim_dir / "job.tsv"
     train_path = interim_dir / "train.tsv"
 
@@ -109,6 +113,7 @@ def load_job_tsv(params: Dict[str, Any]) -> Tuple[List[str], List[str]]:
 
     texts: List[str] = []
     labels: List[str] = []
+    rows: List[Dict[str, Any]] = []
     with target.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
@@ -118,27 +123,30 @@ def load_job_tsv(params: Dict[str, Any]) -> Tuple[List[str], List[str]]:
                 continue
             texts.append(text)
             labels.append(label)
+            rows.append(row)
 
     if not texts:
         raise SystemExit(f"[core_evaluate] Aucune donnée valide dans {target}")
 
-    return texts, labels
+    return texts, labels, rows
 
 
 def maybe_debug_subsample_eval(
     texts: List[str],
     labels: List[str],
     params: Dict[str, Any],
+    rows: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Si debug_mode=True, limiter la taille du dataset d'évaluation.
+    Si rows est fourni, il est sous-échantillonné de manière cohérente.
     """
     if not params.get("debug_mode"):
-        return texts, labels
+        return (texts, labels, rows) if rows is not None else (texts, labels)
 
     max_docs = 1000
     if len(texts) <= max_docs:
-        return texts, labels
+        return (texts, labels, rows) if rows is not None else (texts, labels)
 
     seed = parse_seed(params.get("seed"), default=42) or 42
     print(f"[core_evaluate] debug_mode actif : sous-échantillon de {max_docs} docs sur {len(texts)} (seed={seed})")
@@ -147,6 +155,9 @@ def maybe_debug_subsample_eval(
     idx_sel = sorted(indices[:max_docs])
     texts_sub = [texts[i] for i in idx_sel]
     labels_sub = [labels[i] for i in idx_sel]
+    if rows is not None:
+        rows_sub = [rows[i] for i in idx_sel]
+        return texts_sub, labels_sub, rows_sub
     return texts_sub, labels_sub
 
 
@@ -159,6 +170,16 @@ def compute_basic_metrics(y_true: List[str], y_pred: List[str]) -> Dict[str, Any
         "macro_f1": macro_f1,
         "classification_report": report_dict,
     }
+
+
+def group_indices_by_field(rows: List[Dict[str, Any]], field: str) -> Dict[Any, List[int]]:
+    groups: Dict[Any, List[int]] = defaultdict(list)
+    for i, row in enumerate(rows):
+        val = row.get(field)
+        if val is None:
+            val = "__missing__"
+        groups[val].append(i)
+    return groups
 
 
 def save_eval_outputs(
@@ -191,7 +212,8 @@ def save_eval_outputs(
     # meta_eval.json : contexte de l'évaluation
     meta_eval = {
         "profile": params.get("profile"),
-        "corpus_id": params.get("corpus_id", params["corpus"].get("corpus_id")),
+        "dataset_id": params.get("dataset_id", params.get("corpus_id", params.get("corpus", {}).get("corpus_id"))),
+        "corpus_id": params.get("corpus_id", params.get("corpus", {}).get("corpus_id")),
         "view": params.get("view"),
         "family": family,
         "model_id": model_id,
@@ -231,8 +253,9 @@ def eval_spacy_model(params: Dict[str, Any], model_id: str) -> None:
 
     # On reconstruit le chemin vers les DocBin éventuels produits par core_prepare
     corpus_id = params.get("corpus_id", params.get("corpus", {}).get("corpus_id", "unknown_corpus"))
+    dataset_id = params.get("dataset_id") or corpus_id
     view = params.get("view", "unknown_view")
-    spacy_proc_dir = Path("data") / "processed" / corpus_id / view / "spacy"
+    spacy_proc_dir = Path("data") / "processed" / str(dataset_id) / view / "spacy"
 
     # Chercher tous les DocBin "job*.spacy" (shardés ou non)
     job_docbins = sorted(spacy_proc_dir.glob("job*.spacy"))
@@ -261,8 +284,8 @@ def eval_spacy_model(params: Dict[str, Any], model_id: str) -> None:
     else:
         # ---- Fallback TSV (flux V2) ----
         print("[core_evaluate:spacy] Aucun DocBin job*.spacy trouvé, fallback sur job.tsv")
-        texts, labels_true = load_job_tsv(params)
-        texts, labels_true = maybe_debug_subsample_eval(texts, labels_true, params)
+        texts, labels_true, rows = load_job_tsv(params)
+        texts, labels_true, _rows = maybe_debug_subsample_eval(texts, labels_true, params, rows)
 
     print(f"[core_evaluate:spacy] Évaluation sur {len(texts)} docs.")
     labels_pred: List[str] = []
@@ -300,8 +323,11 @@ def eval_sklearn_model(params: Dict[str, Any], model_id: str) -> None:
     vectorizer = bundle["vectorizer"]
     estimator = bundle["estimator"]
 
-    texts, labels_true = load_job_tsv(params)
-    texts, labels_true = maybe_debug_subsample_eval(texts, labels_true, params)
+    analysis_cfg = params.get("analysis") or {}
+    compare_by = analysis_cfg.get("compare_by") or []
+
+    texts, labels_true, rows = load_job_tsv(params)
+    texts, labels_true, rows = maybe_debug_subsample_eval(texts, labels_true, params, rows)
 
     print(f"[core_evaluate:sklearn] Évaluation sur {len(texts)} docs.")
     X = vectorizer.transform(texts)
@@ -314,6 +340,21 @@ def eval_sklearn_model(params: Dict[str, Any], model_id: str) -> None:
     metrics["n_features"] = int(getattr(X, "shape", (0, 0))[1])
 
     save_eval_outputs(params, "sklearn", model_id, metrics)
+
+    for field in compare_by:
+        groups = group_indices_by_field(rows, field)
+        metrics_by_field: Dict[Any, Any] = {}
+        for val, idxs in groups.items():
+            y_true_g = [labels_true[i] for i in idxs]
+            y_pred_g = [labels_pred[i] for i in idxs]
+            metrics_by_field[val] = compute_basic_metrics(y_true_g, y_pred_g)
+
+        reports_dir = get_reports_dir(params, "sklearn", model_id)
+        ensure_dir(reports_dir)
+        path_group = reports_dir / f"metrics_by_{field}.json"
+        with path_group.open("w", encoding="utf-8") as f:
+            json.dump(metrics_by_field, f, ensure_ascii=False, indent=2)
+        print(f"[core_evaluate] metrics_by_{field}.json écrit : {path_group}")
 
 
 #  Éval HF (squelette)
@@ -365,8 +406,11 @@ def eval_hf_model(params: Dict[str, Any], model_id: str) -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
 
-    texts, labels_true = load_job_tsv(params)
-    texts, labels_true = maybe_debug_subsample_eval(texts, labels_true, params)
+    analysis_cfg = params.get("analysis") or {}
+    compare_by = analysis_cfg.get("compare_by") or []
+
+    texts, labels_true, rows = load_job_tsv(params)
+    texts, labels_true, rows = maybe_debug_subsample_eval(texts, labels_true, params, rows)
 
     if not texts:
         print("[core_evaluate:hf] Aucun document à évaluer.")
@@ -428,6 +472,21 @@ def eval_hf_model(params: Dict[str, Any], model_id: str) -> None:
 
     save_eval_outputs(params, "hf", model_id, metrics)
 
+    for field in compare_by:
+        groups = group_indices_by_field(rows, field)
+        metrics_by_field: Dict[Any, Any] = {}
+        for val, idxs in groups.items():
+            y_true_g = [labels_true[i] for i in idxs]
+            y_pred_g = [labels_pred[i] for i in idxs]
+            metrics_by_field[val] = compute_basic_metrics(y_true_g, y_pred_g)
+
+        reports_dir = get_reports_dir(params, "hf", model_id)
+        ensure_dir(reports_dir)
+        path_group = reports_dir / f"metrics_by_{field}.json"
+        with path_group.open("w", encoding="utf-8") as f:
+            json.dump(metrics_by_field, f, ensure_ascii=False, indent=2)
+        print(f"[core_evaluate] metrics_by_{field}.json écrit : {path_group}")
+
 
 
 #  Éval "check"
@@ -438,7 +497,7 @@ def eval_check_model(params: Dict[str, Any], model_id: str = "check_default") ->
     Famille 'check' vue comme un pseudo-modèle :
     évaluation = refaire des stats simples sur job.tsv et consigner.
     """
-    texts, labels_true = load_job_tsv(params)
+    texts, labels_true, _rows = load_job_tsv(params)
     labels_set = sorted(set(labels_true))
     label_counts = {l: labels_true.count(l) for l in labels_set}
 
