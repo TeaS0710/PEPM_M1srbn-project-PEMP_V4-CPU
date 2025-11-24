@@ -13,13 +13,13 @@ Le but : pouvoir lancer, rejouer et comparer des expériences complètes (prépa
 * quelques **variables Makefile** (`PROFILE`, `CORPUS_ID`, etc.),
 * et des `--override key=val` pour les cas spécifiques.
 
-Version : **V4.05 – CPU**.
+Version : **V5 – CPU**.
 
 ---
 
 ## 1. Vue d’ensemble
 
-Le pipeline V4.05 est structuré autour de trois scripts « cœur » :
+Le pipeline V5 est structuré autour de trois scripts « cœur » :
 
 * `scripts/core/core_prepare.py`
   ➜ TEI XML → TSV / formats entraînables (spaCy, sklearn, HF).

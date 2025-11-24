@@ -22,6 +22,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from scripts.core.core_utils import load_yaml
 
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover - optional dependency
+    plt = None
+
 
 # ---------------------------------------------------------------------------
 # Data classes (see dev_V5.md §4)
@@ -379,34 +384,40 @@ def _first_in_list(val: Any) -> Optional[str]:
 def _infer_metadata(
     make_vars: Dict[str, str], overrides: Dict[str, Any], profile: Optional[str] = None
 ) -> Dict[str, Any]:
-    dataset_id = overrides.get("dataset_id") or make_vars.get("CORPUS_ID")
-    if not dataset_id:
-        dataset_id = profile or "unknown_dataset"
+    dataset_id = (
+        overrides.get("dataset_id")
+        or make_vars.get("DATASET_ID")
+        or make_vars.get("CORPUS_ID")
+        or ""
+    )
 
-    view = overrides.get("view")
-    if view is None:
-        view = _lookup_nested(overrides, "ideology.view")
-    if view is None:
-        view = "ideology_global"
+    view = overrides.get("view") or _lookup_nested(overrides, "ideology.view") or ""
 
-    family = make_vars.get("FAMILY") or make_vars.get("family") or "unknown_family"
+    family = make_vars.get("FAMILY") or ""
 
-    model_id: Optional[str] = make_vars.get("MODEL_ID") or make_vars.get("model_id")
-    if not model_id:
-        if family == "sklearn":
-            model_id = _first_in_list(overrides.get("models_sklearn"))
-        elif family == "spacy":
-            model_id = _first_in_list(overrides.get("models_spacy"))
-        elif family == "hf":
-            model_id = _first_in_list(overrides.get("models_hf"))
+    model_id: Optional[str] = None
+    if family:
+        model_id = make_vars.get("MODEL_ID") or make_vars.get("model_id")
+        if not model_id:
+            if family == "sklearn":
+                model_id = _first_in_list(overrides.get("models_sklearn"))
+            elif family == "spacy":
+                model_id = _first_in_list(overrides.get("models_spacy"))
+            elif family == "hf":
+                model_id = _first_in_list(overrides.get("models_hf"))
 
     corpus_id = make_vars.get("CORPUS_ID") or ""
     train_prop = make_vars.get("TRAIN_PROP") or ""
 
-    metrics_path: Optional[str] = None
+    metrics_path = ""
     if dataset_id and view and family and model_id:
         metrics_path = os.path.join(
-            "reports", str(dataset_id), str(view), str(family), str(model_id), "metrics.json"
+            "reports",
+            str(dataset_id),
+            str(view),
+            str(family),
+            str(model_id),
+            "metrics.json",
         )
 
     return {
@@ -414,9 +425,9 @@ def _infer_metadata(
         "view": view or "",
         "family": family or "",
         "model_id": model_id or "",
-        "corpus_id": corpus_id,
-        "train_prop": train_prop,
-        "metrics_path": metrics_path or "",
+        "corpus_id": corpus_id or "",
+        "train_prop": train_prop or "",
+        "metrics_path": metrics_path,
     }
 
 
@@ -496,18 +507,25 @@ def run_analysis_hooks(exp_config: ExpConfig, runs_tsv_path: Path) -> None:
         enriched_row = {**row, **metrics}
         # Propagate TRAIN_PROP if available in make_vars_json to ease plotting hooks
         make_vars_json = row.get("make_vars_json")
+        train_prop_val: str | float = ""
         if make_vars_json:
             try:
                 make_vars_data = json.loads(make_vars_json)
                 if isinstance(make_vars_data, dict) and "TRAIN_PROP" in make_vars_data:
-                    enriched_row["TRAIN_PROP"] = make_vars_data.get("TRAIN_PROP")
+                    train_prop_val = make_vars_data.get("TRAIN_PROP")
             except Exception:
                 pass
+        enriched_row["TRAIN_PROP"] = train_prop_val
         metrics_rows.append(enriched_row)
 
     metrics_global_path = runs_dir / "metrics_global.tsv"
     if metrics_rows:
-        _write_tsv(metrics_rows, metrics_global_path, list(metrics_rows[0].keys()))
+        base_columns = list(RUN_COLUMNS)
+        extra_columns = set()
+        for row in metrics_rows:
+            extra_columns.update(set(row.keys()) - set(base_columns))
+        columns = base_columns + sorted(extra_columns)
+        _write_tsv(metrics_rows, metrics_global_path, columns)
 
     for hook in hooks:
         if hook.get("type") == "report_markdown":
@@ -520,19 +538,31 @@ def run_analysis_hooks(exp_config: ExpConfig, runs_tsv_path: Path) -> None:
             if not curves_path.exists():
                 print(f"[analysis_hooks] metrics_global.tsv missing at {curves_path}, skipping curves")
                 continue
-            try:
-                import matplotlib.pyplot as plt
-            except ImportError:
-                print("[analysis_hooks] matplotlib not installed, cannot generate curves")
+
+            if plt is None:
+                print("[superior] matplotlib non disponible, hook 'curves' ignoré")
                 continue
 
             with curves_path.open("r", encoding="utf-8") as f:
                 reader = csv.DictReader(f, delimiter="\t")
-                curves_rows = list(reader)
+                curves_rows_raw = list(reader)
 
-            if not curves_rows:
+            if not curves_rows_raw:
                 print("[analysis_hooks] metrics_global.tsv is empty, skipping curves")
                 continue
+
+            curves_rows: List[Dict[str, Any]] = []
+            for row in curves_rows_raw:
+                parsed_row: Dict[str, Any] = {}
+                for key, value in row.items():
+                    if value in (None, ""):
+                        parsed_row[key] = ""
+                        continue
+                    try:
+                        parsed_row[key] = float(value)
+                    except ValueError:
+                        parsed_row[key] = value
+                curves_rows.append(parsed_row)
 
             metrics = hook.get("metrics") or []
             x_axis = hook.get("x_axis")
@@ -549,19 +579,15 @@ def run_analysis_hooks(exp_config: ExpConfig, runs_tsv_path: Path) -> None:
 
             plots_dir = runs_dir / "plots"
             plots_dir.mkdir(parents=True, exist_ok=True)
-            generated: List[Path] = []
 
             for metric in metrics:
                 grouped: Dict[tuple, List[tuple]] = {}
                 for row in curves_rows:
-                    try:
-                        x_val_raw = row.get(x_axis, "") if x_axis else None
-                        x_val = float(x_val_raw) if x_val_raw not in (None, "") else None
-                        y_val_raw = row.get(metric, "")
-                        y_val = float(y_val_raw) if y_val_raw not in (None, "") else None
-                    except ValueError:
+                    x_val = row.get(x_axis) if x_axis else None
+                    y_val = row.get(metric)
+                    if x_val in (None, "") or y_val in (None, ""):
                         continue
-                    if x_val is None or y_val is None:
+                    if not isinstance(x_val, (int, float)) or not isinstance(y_val, (int, float)):
                         continue
                     group_key = tuple(row.get(col, "") for col in group_by)
                     grouped.setdefault(group_key, []).append((x_val, y_val))
@@ -578,23 +604,19 @@ def run_analysis_hooks(exp_config: ExpConfig, runs_tsv_path: Path) -> None:
                     xs, ys = zip(*points_sorted)
                     label = ", ".join(str(v) for v in group_key if v)
                     plt.plot(xs, ys, marker="o", label=label or None)
-                plt.xlabel(x_axis or "index")
+
+                plt.xlabel(x_axis)
                 plt.ylabel(metric)
+                plt.title(f"{metric} vs {x_axis}")
                 if group_by:
                     plt.legend()
                 plt.grid(True, linestyle=":", alpha=0.4)
-
-                plot_path = plots_dir / f"{metric}__vs__{x_axis}.png"
                 plt.tight_layout()
+
+                plot_path = runs_dir / "plots" / f"{metric}__vs__{x_axis}.png"
+                plot_path.parent.mkdir(parents=True, exist_ok=True)
                 plt.savefig(plot_path)
                 plt.close()
-                generated.append(plot_path)
-
-            if generated:
-                print(
-                    f"[analysis_hooks] Generated {len(generated)} plot(s): "
-                    + ", ".join(str(p.name) for p in generated)
-                )
 
 
 def _write_report_markdown(path: Path, runs: Dict[str, Dict[str, Any]]) -> None:

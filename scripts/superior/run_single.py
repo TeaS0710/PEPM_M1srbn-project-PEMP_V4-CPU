@@ -112,6 +112,8 @@ def run_single(args: argparse.Namespace) -> int:
                 print(
                     "[run_single] RAM limit exceeded, killing run", file=sys.stderr
                 )
+                log_file.write("[run_single] RAM limit exceeded, killing run\n")
+                log_file.flush()
                 proc.terminate()
                 try:
                     proc.wait(timeout=5)
