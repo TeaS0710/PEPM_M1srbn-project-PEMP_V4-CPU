@@ -1,0 +1,34 @@
+profile: ideo_quick_web1_asr1
+description: >
+  Fusion web1+asr1, vue ideology_global, analyse juxtaposée.
+
+dataset_id: web1_asr1
+
+data:
+  corpus_ids: [web1, asr1]
+  merge_mode: juxtaposed          # single | merged | juxtaposed | separate
+  source_field: corpus_id
+
+view: ideology_global
+
+analysis:
+  compare_by:
+    - corpus_id
+
+families: [check, spacy, sklearn]
+
+models_spacy:
+  - spacy_cnn_quick
+
+models_sklearn:
+  - tfidf_svm_quick
+
+models_hf: []
+
+hardware_preset: small
+
+train_prop: 0.8
+seed: 42
+
+balance_strategy: oversample
+balance_preset: parity

@@ -1,0 +1,5 @@
+logs/
+superior/*/logs/
+superior/*/plots/
+superior/*/metrics_global.tsv
+superior/*/report.md

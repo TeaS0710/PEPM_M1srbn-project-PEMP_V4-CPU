@@ -1,0 +1,17 @@
+profile: multi_demo
+description: "Profil de test multi-corpus web1+web2"
+dataset_id: web1_web2
+view: test_view
+families: []
+models_spacy: []
+models_sklearn: []
+models_hf: []
+
+analysis:
+  compare_by:
+    - corpus_id
+
+data:
+  corpus_ids: [web1, web2]
+  merge_mode: juxtaposed
+  source_field: corpus_id
