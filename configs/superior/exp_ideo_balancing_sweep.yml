@@ -10,8 +10,12 @@ base:
   make_vars:
     HARDWARE_PRESET: small
     TRAIN_PROP: 0.8
+    MAX_DOCS_SKLEARN: 100
+    MAX_DOCS_SPACY: 100
+    MAX_DOCS_HF: 20
   overrides:
     view: ideology_global
+    max_docs_global: 1500
 
 axes:
   - name: dataset
