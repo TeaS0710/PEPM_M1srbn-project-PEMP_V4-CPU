@@ -61,6 +61,24 @@ def parse_args() -> argparse.Namespace:
 
     return parser.parse_args()
 
+def _normalize_override_for_make(raw: str) -> str:
+    """
+    Normalisation 'safe' pour les overrides passées à make :
+    - si la valeur ressemble à une liste [a, b, c], on enlève les espaces après les virgules
+      -> [a,b,c] pour éviter que le shell/Make coupe l'argument.
+    """
+    text = str(raw)
+    if "=" not in text:
+        return text
+    key, value = text.split("=", 1)
+    v = value.strip()
+    if v.startswith("[") and "]" in v:
+        inner = v[1:-1]
+        parts = [p.strip() for p in inner.split(",")]
+        v = "[" + ",".join(parts) + "]"
+    return f"{key}={v}"
+
+
 
 def build_cmd(args: argparse.Namespace) -> list[str]:
     cmd: list[str] = [
@@ -75,10 +93,12 @@ def build_cmd(args: argparse.Namespace) -> list[str]:
         cmd.append(str(mv))
 
     if args.override:
-        overrides_str = " ".join(str(o) for o in args.override)
+        normalized = [_normalize_override_for_make(o) for o in args.override]
+        overrides_str = " ".join(normalized)
         cmd.append(f"OVERRIDES={overrides_str}")
 
     return cmd
+
 
 
 def main() -> int:

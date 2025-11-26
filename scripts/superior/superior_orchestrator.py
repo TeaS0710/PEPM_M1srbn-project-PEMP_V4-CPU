@@ -254,7 +254,7 @@ def load_exp_config(path: str) -> ExpConfig:
         description=raw.get("description", ""),
         base_profile=base_cfg.get("profile", ""),
         base_stage=base_cfg.get("stage", "pipeline"),
-        base_make_vars = (base_cfg.get("make_vars") or base_cfg.get("fixed") or {})
+        base_make_vars = (base_cfg.get("make_vars") or base_cfg.get("fixed") or {}),
         base_overrides=base_cfg.get("overrides") or {},
         axes=axes,
         grid_mode=grid_cfg.get("mode", "cartesian"),

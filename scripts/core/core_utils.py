@@ -12,6 +12,7 @@ from rich.table import Table
 from rich.panel import Panel
 
 import yaml
+import json
 
 console = Console()
 COMMON_DIR = os.path.join("configs", "common")
@@ -53,23 +54,84 @@ def parse_override(raw: str) -> (List[str], Any):
     path = key.split(".")
     return path, value
 
+def _smart_cast_override(value: Any) -> Any:
+    """
+    Caster une valeur d'override (string) vers un type utile :
+    - bool, int, float
+    - listes de la forme [web1], [web1,asr1], ["web1", "asr1"], []
+    - dict JSON éventuel
+    Sinon, on retourne la string telle quelle.
+    """
+    if not isinstance(value, str):
+        return value
+
+    s = value.strip()
+    if not s:
+        return value
+
+    lower = s.lower()
+    # booléens
+    if lower in ("true", "false"):
+        return lower == "true"
+    # none/null
+    if lower in ("none", "null"):
+        return None
+
+    # int / float
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        pass
+
+    # Listes / dicts entre crochets ou accolades
+    if s.startswith("[") and s.endswith("]"):
+        inner = s[1:-1].strip()
+        if not inner:
+            return []
+
+        # 1) tentative JSON (pour ["web1","asr1"], ["web1", "asr1"], etc.)
+        try:
+            parsed = json.loads(s.replace("'", '"'))
+            if isinstance(parsed, (list, dict)):
+                return parsed
+        except Exception:
+            pass
+
+        # 2) fallback liste simple : [web1, asr1] -> ["web1","asr1"]
+        parts = [p.strip() for p in inner.split(",")]
+        items = []
+        for p in parts:
+            if not p:
+                continue
+            # enlever guillemets éventuels
+            p_clean = p.strip().strip('"').strip("'")
+            if not p_clean:
+                continue
+            items.append(_smart_cast_override(p_clean))
+        return items
+
+    if s.startswith("{") and s.endswith("}"):
+        try:
+            parsed = json.loads(s.replace("'", '"'))
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    return s
+
+
 
 def apply_overrides(config: Dict[str, Any], overrides: List[str]) -> Dict[str, Any]:
     """Appliquer une liste de 'key=value' sur un dict (nested)."""
     cfg = deepcopy(config)
     for raw in overrides:
         path, value = parse_override(raw)
-        # Tentative de cast simple
-        if isinstance(value, str) and value.lower() in ("true", "false"):
-            cast_val: Any = value.lower() == "true"
-        else:
-            try:
-                cast_val = int(value)
-            except (ValueError, TypeError):
-                try:
-                    cast_val = float(value)
-                except (ValueError, TypeError):
-                    cast_val = value
+        cast_val = _smart_cast_override(value)
 
         d: Dict[str, Any] = cfg
         for key in path[:-1]:
@@ -78,6 +140,7 @@ def apply_overrides(config: Dict[str, Any], overrides: List[str]) -> Dict[str, A
             d = d[key]
         d[path[-1]] = cast_val
     return cfg
+
 
 
 def parse_seed(raw, default: Optional[int] = 42) -> Optional[int]:
