@@ -584,15 +584,33 @@ def run_analysis_hooks(exp_config: ExpConfig, runs_tsv_path: Path) -> None:
             except Exception:
                 print(f"[analysis_hooks] Failed to load metrics at {metrics_path}, skipping.")
                 metrics = {}
-        else:
-            if metrics_path:
-                print(
-                    f"[analysis_hooks] metrics.json not found at {metrics_path} for run {row.get('run_id')}"
-                )
-        enriched_row = {**row, **metrics}
-        # Propagate TRAIN_PROP if available in make_vars_json to ease plotting hooks
+        elif metrics_path:
+            print(
+                f"[analysis_hooks] metrics.json not found at {metrics_path} for run {row.get('run_id')}"
+            )
+
+        # Base : infos du run + métriques du modèle
+        enriched_row: Dict[str, Any] = {**row, **metrics}
+
+        # 1) Déplier axis_values_json → colonnes axis_<axis_name>
+        axis_json = row.get("axis_values_json")
+        if axis_json:
+            try:
+                axis_data = json.loads(axis_json)
+                if isinstance(axis_data, dict):
+                    for axis_name, label in axis_data.items():
+                        col_name = f"axis_{axis_name}"
+                        # On n'écrase pas une éventuelle colonne existante
+                        if col_name not in enriched_row:
+                            enriched_row[col_name] = label
+            except Exception:
+                # On reste silencieux : les scripts d'analyse pourront
+                # toujours re-parser axis_values_json si besoin.
+                pass
+
+        # 2) Propager TRAIN_PROP depuis make_vars_json (numérique ou str)
         make_vars_json = row.get("make_vars_json")
-        train_prop_val: str | float = ""
+        train_prop_val: str | float = enriched_row.get("TRAIN_PROP", "")
         if make_vars_json:
             try:
                 make_vars_data = json.loads(make_vars_json)
@@ -601,7 +619,9 @@ def run_analysis_hooks(exp_config: ExpConfig, runs_tsv_path: Path) -> None:
             except Exception:
                 pass
         enriched_row["TRAIN_PROP"] = train_prop_val
+
         metrics_rows.append(enriched_row)
+
 
     metrics_global_path = runs_dir / "metrics_global.tsv"
     if metrics_rows:

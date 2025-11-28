@@ -1,0 +1,22 @@
+[run_single] exp_id=ideo_learning_curve run_id=ideo_learning_curve_run_000014
+[run_single] CMD: make run STAGE=pipeline PROFILE= TRAIN_PROP=0.4 FAMILY=spacy BALANCE_STRATEGY=none SEED=42 OVERRIDES=train_prop=0.4 families=["spacy"] models_spacy=["spacy_cnn_quick"] balance_strategy=none balance_preset=small_alpha
+make[1]: Entering directory '/media/teas/disque_B1/PEPM_M1srbn-project-PEMP_V5.6-CPU-main'
+[run] STAGE=pipeline PROFILE= FAMILY=spacy
+make[2]: Entering directory '/media/teas/disque_B1/PEPM_M1srbn-project-PEMP_V5.6-CPU-main'
+.venv/bin/python scripts/pre/pre_check_env.py --profile  || true
+usage: pre_check_env.py [-h] [--profile PROFILE]
+pre_check_env.py: error: argument --profile: expected one argument
+[check_scripts] Compilation de tous les scripts Python (py_compile)...
+[check_scripts] OK : syntaxe Python valide pour tous les scripts.
+[check] Vérification du profil ...
+.venv/bin/python scripts/pre/pre_check_config.py \
+--profile  \
+--override corpus_id=web1 --override train_prop=0.4 --override balance_strategy=none --override seed=42 --override train_prop=0.4 --override families=[spacy] --override models_spacy=[spacy_cnn_quick] --override balance_strategy=none --override balance_preset=small_alpha \
+--verbose
+usage: pre_check_config.py [-h] --profile PROFILE [--override OVERRIDE]
+                           [--verbose]
+pre_check_config.py: error: argument --profile: expected one argument
+make[2]: *** [makefile:170: check] Error 2
+make[2]: Leaving directory '/media/teas/disque_B1/PEPM_M1srbn-project-PEMP_V5.6-CPU-main'
+make[1]: *** [makefile:222: run] Error 2
+make[1]: Leaving directory '/media/teas/disque_B1/PEPM_M1srbn-project-PEMP_V5.6-CPU-main'
